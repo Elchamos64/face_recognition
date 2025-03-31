@@ -9,11 +9,13 @@ import time
 import pickle
 import pyttsx3
 
-# === Load face encodings ===
+# === Load face encodings with metadata ===
 with open("encodings.pickle", "rb") as f:
     data = pickle.loads(f.read())
 known_face_encodings = data["encodings"]
 known_face_names = data["names"]
+known_face_ages = data.get("ages", [])
+known_face_occupations = data.get("occupations", [])
 
 # === Text-to-speech engine ===
 engine = pyttsx3.init(driverName='espeak')
@@ -29,55 +31,66 @@ cv_scaler = 4
 face_locations = []
 face_encodings = []
 face_names = []
+face_ages = []
+face_occupations = []
 last_spoken_name = None
 frame_count = 0
 start_time = time.time()
 fps = 0
 
-# === Speak name if new ===
-def speak_name(name):
+# === Speak name and metadata if new ===
+def speak_name(name, age, occupation):
     global last_spoken_name
     if name != last_spoken_name and name != "Unknown":
-        engine.say(f"Hello, my name is {name}")
+        engine.say(f"Hello, my name is {name}. I am {age} years old and work as a {occupation}.")
         engine.runAndWait()
         last_spoken_name = name
 
 # === Process frame and run recognition ===
 def process_frame(frame):
-    global face_locations, face_encodings, face_names
+    global face_locations, face_encodings, face_names, face_ages, face_occupations
     resized_frame = cv2.resize(frame, (0, 0), fx=1/cv_scaler, fy=1/cv_scaler)
     rgb_resized = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
 
     face_locations = face_recognition.face_locations(rgb_resized)
     face_encodings = face_recognition.face_encodings(rgb_resized, face_locations, model='large')
     face_names = []
+    face_ages = []
+    face_occupations = []
 
     for face_encoding in face_encodings:
         matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
         name = "Unknown"
+        age = "Unknown"
+        occupation = "Unknown"
 
         face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
         if len(face_distances) > 0:
             best_index = np.argmin(face_distances)
             if matches[best_index]:
                 name = known_face_names[best_index]
+                age = known_face_ages[best_index] if known_face_ages else "Unknown"
+                occupation = known_face_occupations[best_index] if known_face_occupations else "Unknown"
 
         face_names.append(name)
-        speak_name(name)
+        face_ages.append(age)
+        face_occupations.append(occupation)
+        speak_name(name, age, occupation)
 
     return frame
 
-# === Draw bounding boxes and names ===
+# === Draw bounding boxes and metadata ===
 def draw_results(frame):
-    for (top, right, bottom, left), name in zip(face_locations, face_names):
+    for (top, right, bottom, left), name, age, occupation in zip(face_locations, face_names, face_ages, face_occupations):
         top *= cv_scaler
         right *= cv_scaler
         bottom *= cv_scaler
         left *= cv_scaler
 
         cv2.rectangle(frame, (left, top), (right, bottom), (244, 42, 3), 3)
-        cv2.rectangle(frame, (left-3, top-35), (right+3, top), (244, 42, 3), cv2.FILLED)
-        cv2.putText(frame, name, (left+6, top-6), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255,255,255), 1)
+        cv2.rectangle(frame, (left-3, top-55), (right+3, top), (244, 42, 3), cv2.FILLED)
+        text = f"{name}, {age} yrs, {occupation}"
+        cv2.putText(frame, text, (left+6, top-10), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255,255,255), 1)
     return frame
 
 # === FPS calculation ===
@@ -118,7 +131,7 @@ def update_frame():
         video_label.imgtk = imgtk
         video_label.configure(image=imgtk)
 
-        detected = "\n".join(face_names) if face_names else "No faces detected"
+        detected = "\n".join([f"{n}, {a} yrs, {o}" for n, a, o in zip(face_names, face_ages, face_occupations)]) if face_names else "No faces detected"
         output_label.config(text=f"Detected:\n{detected}\n\nFPS: {current_fps:.2f}")
     except Exception as e:
         print(f"[ERROR] {e}")
