@@ -1,1 +1,2 @@
-# face_recognition
+# Face Recognition - Embedded Systems Project
+## Overview
