@@ -8,6 +8,7 @@ from picamera2 import Picamera2
 import time
 import pickle
 import pyttsx3
+import threading
 
 # === Load face encodings with metadata ===
 with open("encodings.pickle", "rb") as f:
@@ -38,13 +39,31 @@ frame_count = 0
 start_time = time.time()
 fps = 0
 
-# === Speak name and metadata if new ===
+# === Speech Queue Setup ===
+speech_queue = []
+speech_lock = threading.Lock()
+
+def speech_worker():
+    while True:
+        if speech_queue:
+            with speech_lock:
+                message = speech_queue.pop(0)
+            engine.say(message)
+            engine.runAndWait()
+        else:
+            time.sleep(0.1)
+
+speech_thread = threading.Thread(target=speech_worker, daemon=True)
+speech_thread.start()
+
+# === Speak name and metadata if new, using queue ===
 def speak_name(name, age, occupation):
-    global last_spoken_name
-    if name != last_spoken_name and name != "Unknown":
-        engine.say(f"Hello, my name is {name}. I am {age} years old and work as a {occupation}.")
-        engine.runAndWait()
-        last_spoken_name = name
+    global last_spoken_name, speech_queue
+    if name != "Unknown" and name != last_spoken_name:
+         message = f"Name: {name}, Age: {age}, Occupation: {occupation}"
+         with speech_lock:
+             speech_queue.append(message)
+         last_spoken_name = name
 
 # === Process frame and run recognition ===
 def process_frame(frame):
@@ -79,18 +98,18 @@ def process_frame(frame):
 
     return frame
 
-# === Draw bounding boxes and metadata ===
+# === Draw bounding boxes and only name on video feed ===
 def draw_results(frame):
-    for (top, right, bottom, left), name, age, occupation in zip(face_locations, face_names, face_ages, face_occupations):
+    for (top, right, bottom, left), name in zip(face_locations, face_names):
         top *= cv_scaler
         right *= cv_scaler
         bottom *= cv_scaler
         left *= cv_scaler
 
         cv2.rectangle(frame, (left, top), (right, bottom), (244, 42, 3), 3)
-        cv2.rectangle(frame, (left-3, top-55), (right+3, top), (244, 42, 3), cv2.FILLED)
-        text = f"{name}, {age} yrs, {occupation}"
-        cv2.putText(frame, text, (left+6, top-10), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255,255,255), 1)
+        # Draw a filled rectangle above the face for the name label
+        cv2.rectangle(frame, (left-3, top-30), (right+3, top), (244, 42, 3), cv2.FILLED)
+        cv2.putText(frame, name, (left+6, top-8), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255,255,255), 1)
     return frame
 
 # === FPS calculation ===
@@ -104,17 +123,25 @@ def calculate_fps():
         start_time = time.time()
     return fps
 
-# === Tkinter UI ===
+# === Tkinter UI Setup ===
 window = tk.Tk()
 window.title("Face Recognition UI")
 window.geometry("1300x600")
 window.configure(bg='black')
 
-video_label = Label(window)
-video_label.pack(side="left", padx=10, pady=10)
+# Create a details frame on the left for displaying person info
+details_frame = tk.Frame(window, bg="black")
+details_frame.pack(side="left", padx=10, pady=10, fill="both", expand=False)
 
-output_label = Label(window, text="", font=("Helvetica", 16), bg="black", fg="white", justify="left")
-output_label.pack(side="right", padx=10, pady=10, fill="both", expand=True)
+# Create a video frame on the right for the live feed
+video_frame = tk.Frame(window, bg="black")
+video_frame.pack(side="right", padx=10, pady=10, fill="both", expand=True)
+
+video_label = Label(video_frame)
+video_label.pack(padx=10, pady=10)
+
+output_label = Label(details_frame, text="", font=("Helvetica", 16), bg="black", fg="white", justify="left")
+output_label.pack(padx=10, pady=10, fill="both", expand=True)
 
 # === Main loop to update frames ===
 def update_frame():
@@ -131,8 +158,14 @@ def update_frame():
         video_label.imgtk = imgtk
         video_label.configure(image=imgtk)
 
-        detected = "\n".join([f"{n}, {a} yrs, {o}" for n, a, o in zip(face_names, face_ages, face_occupations)]) if face_names else "No faces detected"
-        output_label.config(text=f"Detected:\n{detected}\n\nFPS: {current_fps:.2f}")
+        # Format detected persons' details in a nice way
+        if face_names:
+            detected_text = ""
+            for n, a, o in zip(face_names, face_ages, face_occupations):
+                detected_text += f"Name: {n}\nAge: {a}\nOccupation: {o}\n\n"
+        else:
+            detected_text = "No faces detected"
+        output_label.config(text=f"{detected_text}\nFPS: {current_fps:.2f}")
     except Exception as e:
         print(f"[ERROR] {e}")
 
