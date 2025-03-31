@@ -25,7 +25,4 @@
       - facial-recognition library
 
  
-#3. Configuration
-    - Replace Y_AP_TOKEN in the code with your actual API_TOKEN.
-    - Optionally ajest the TESTING_MODEE, COLWEND, and other configuration variables as needed.
-    - Ensure that your Rassber P is configured with the correct camera interface and Bluetooth Headsettings.
+#3. How it works
