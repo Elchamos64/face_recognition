@@ -25,4 +25,4 @@
       - facial-recognition library
 
  
-#3. How it works
+3. How it works
