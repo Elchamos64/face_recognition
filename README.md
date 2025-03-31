@@ -6,17 +6,18 @@
 
 2. Create a Virtual Enviroment and Install Dependencies
 
-To create a virtual environment, open a new terminal window and type in:
+    To create a virtual environment, open a new terminal window and type in:
+    
+    python3 -m venv --system-site-packages face_rec
+    
+    This will create a new virtual environment called "face_rec". You can find the folder of this virtual environment under home/pi and it will be called "face_rec".
+    
+    After creating the venv, enter into it by typing in:
+    
+    source face_rec/bin/activate
+    
+    Once your venv is active, install the following dependencies
 
-python3 -m venv --system-site-packages face_rec
-
-This will create a new virtual environment called "face_rec". You can find the folder of this virtual environment under home/pi and it will be called "face_rec".
-
-After creating the venv, enter into it by typing in:
-
-source face_rec/bin/activate
-
-Once your venv is active, install the following dependencies
       - OpenCV 
       - Imutils
       - CMake
