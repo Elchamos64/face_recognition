@@ -2,7 +2,11 @@
 ## Overview
 ## Project Setup
 1. Clone or Download the repository
-    - You will need to place the following files in the same folder: facial_recognition.py, facial_recognition_hardware, image_capture.py and model_training.py
+   You will need to place the following files in the same folder:
+    - facial_recognition.py
+    - facial_recognition_hardware.py
+    - image_capture.py
+    - model_training.py
 
 2. Create a Virtual Enviroment and Install Dependencies
 
