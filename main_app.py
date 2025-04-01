@@ -13,52 +13,121 @@ import pickle
 import numpy as np
 import pyttsx3
 from imutils import paths
+import mysql.connector
 
-### ===== Helper Functions ===== ###
-def create_folder(name):
-    dataset_folder = "dataset"
-    if not os.path.exists(dataset_folder):
-        os.makedirs(dataset_folder)
-    person_folder = os.path.join(dataset_folder, name)
-    if not os.path.exists(person_folder):
-        os.makedirs(person_folder)
-    return person_folder
+##############################
+# Database Manager
+##############################
+class DatabaseManager:
+    def __init__(self, host='localhost', user='root', password='Right1234', database='face_recognition_db'):
+        try:
+            self.cnx = mysql.connector.connect(
+    host='localhost',
+    user='root',
+    password='Right1234',
+    unix_socket='/var/run/mysqld/mysqld.sock'
+)
 
-def save_metadata(name, filename, occupation, age):
-    metadata = {
-        "name": name,
-        "filename": filename,
-        "occupation": occupation,
-        "age": age,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    metadata_file = os.path.join("dataset", name, "metadata.json")
-    if os.path.exists(metadata_file):
-        with open(metadata_file, "r") as f:
-            data = json.load(f)
-    else:
-        data = []
-    data.append(metadata)
-    with open(metadata_file, "w") as f:
-        json.dump(data, f, indent=4)
-    print(f"Metadata saved for {filename}")
+            self.cnx.autocommit = True
+            self.cursor = self.cnx.cursor()
+        except Exception as e:
+            raise Exception(f"Failed to connect to MySQL: {e}")
+        self.database = database
+        self.create_database()
+        self.cnx.database = database
+        self.create_tables()
+    
+    def create_database(self):
+        self.cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.database}")
+    
+    def create_tables(self):
+        # Create persons table
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS persons (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            occupation VARCHAR(255),
+            age INT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        # Create images table
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS images (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            person_id INT,
+            filename VARCHAR(255),
+            image LONGBLOB,
+            timestamp DATETIME,
+            FOREIGN KEY (person_id) REFERENCES persons(id)
+        )
+        """)
+        # Create encodings table (store one row with the pickled encodings)
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS encodings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            data LONGBLOB,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+        """)
+    
+    def add_person(self, name, occupation, age):
+        query = "SELECT id FROM persons WHERE name = %s"
+        self.cursor.execute(query, (name,))
+        result = self.cursor.fetchone()
+        if result:
+            return result[0]
+        else:
+            query = "INSERT INTO persons (name, occupation, age) VALUES (%s, %s, %s)"
+            self.cursor.execute(query, (name, occupation, age))
+            return self.cursor.lastrowid
+    
+    def add_image(self, person_id, filename, image_data, timestamp):
+        query = "INSERT INTO images (person_id, filename, image, timestamp) VALUES (%s, %s, %s, %s)"
+        self.cursor.execute(query, (person_id, filename, image_data, timestamp))
+    
+    def get_all_images(self):
+        query = """
+        SELECT p.name, p.occupation, p.age, i.image
+        FROM images i
+        JOIN persons p ON i.person_id = p.id
+        """
+        self.cursor.execute(query)
+        return self.cursor.fetchall()
+    
+    def update_encodings(self, data):
+        # If there is already a row, update it; otherwise insert a new row
+        query = "SELECT id FROM encodings LIMIT 1"
+        self.cursor.execute(query)
+        result = self.cursor.fetchone()
+        if result:
+            query = "UPDATE encodings SET data = %s WHERE id = %s"
+            self.cursor.execute(query, (data, result[0]))
+        else:
+            query = "INSERT INTO encodings (data) VALUES (%s)"
+            self.cursor.execute(query, (data,))
+    
+    def get_encodings(self):
+        query = "SELECT data FROM encodings ORDER BY updated_at DESC LIMIT 1"
+        self.cursor.execute(query)
+        result = self.cursor.fetchone()
+        if result:
+            return result[0]
+        return None
 
-def load_metadata(imagePath):
-    metadata_file = os.path.join("dataset", imagePath.split(os.path.sep)[-2], "metadata.json")
-    if os.path.exists(metadata_file):
-        with open(metadata_file, "r") as f:
-            metadata_list = json.load(f)
-            for entry in metadata_list:
-                if entry["filename"] in imagePath:
-                    return entry["occupation"], entry["age"]
-    return None, None
+    def close(self):
+        self.cursor.close()
+        self.cnx.close()
 
-### ===== Capture Page ===== ###
+##############################
+# Capture Page
+##############################
 class CaptureFrame(tk.Frame):
-    def __init__(self, parent, camera):
+    def __init__(self, parent, camera, db_manager):
         super().__init__(parent, bg="black")
         self.parent = parent
         self.camera = camera
+        self.db_manager = db_manager
         self.running = False
 
         # Layout: video feed on left, form on right
@@ -94,13 +163,19 @@ class CaptureFrame(tk.Frame):
             messagebox.showerror("Missing Info", "Please fill in all fields.")
             return
 
-        folder = create_folder(name)
         frame = self.camera.capture_array()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Encode the frame to JPEG bytes
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            messagebox.showerror("Error", "Failed to encode image.")
+            return
+        image_bytes = buffer.tobytes()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         filename = f"{name}_{timestamp}.jpg"
-        filepath = os.path.join(folder, filename)
-        cv2.imwrite(filepath, frame)
-        save_metadata(name, filename, occupation, age)
+        # Add or get person ID
+        person_id = self.db_manager.add_person(name, occupation, int(age))
+        # Save image into the DB
+        self.db_manager.add_image(person_id, filename, image_bytes, timestamp)
         messagebox.showinfo("Saved", f"Photo saved for {name}")
 
     def update_frame(self):
@@ -126,11 +201,14 @@ class CaptureFrame(tk.Frame):
     def stop_camera(self):
         self.running = False
 
-### ===== Training Page ===== ###
+##############################
+# Training Page
+##############################
 class TrainFrame(tk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, db_manager):
         super().__init__(parent, bg="black")
         self.parent = parent
+        self.db_manager = db_manager
 
         self.info_label = ttk.Label(self, text="Press the button below to train the model.", font=("Arial", 14))
         self.info_label.pack(pady=20)
@@ -144,17 +222,19 @@ class TrainFrame(tk.Frame):
         threading.Thread(target=self.train_model, daemon=True).start()
 
     def train_model(self):
-        imagePaths = list(paths.list_images("dataset"))
+        rows = self.db_manager.get_all_images()
         knownEncodings = []
         knownNames = []
         knownOccupations = []
         knownAges = []
-        total = len(imagePaths)
-        for (i, imagePath) in enumerate(imagePaths):
+        total = len(rows)
+        print(f"[TRAIN] Found {total} images in the database.")
+        for (i, row) in enumerate(rows):
             print(f"[TRAIN] Processing image {i + 1}/{total}")
-            name = imagePath.split(os.path.sep)[-2]
-            occupation, age = load_metadata(imagePath)
-            image = cv2.imread(imagePath)
+            name, occupation, age, image_data = row
+            # Convert binary image to cv2 image
+            nparr = np.frombuffer(image_data, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             boxes = face_recognition.face_locations(rgb, model="hog")
             encodings = face_recognition.face_encodings(rgb, boxes)
@@ -163,23 +243,27 @@ class TrainFrame(tk.Frame):
                 knownNames.append(name)
                 knownOccupations.append(occupation)
                 knownAges.append(age)
+        # Serialize the encodings data
         data = {
             "encodings": knownEncodings,
             "names": knownNames,
             "occupations": knownOccupations,
             "ages": knownAges
         }
-        with open("encodings.pickle", "wb") as f:
-            f.write(pickle.dumps(data))
-        print("[TRAIN] Training complete. Encodings saved to 'encodings.pickle'")
+        pickled_data = pickle.dumps(data)
+        self.db_manager.update_encodings(pickled_data)
+        print("[TRAIN] Training complete. Encodings updated in the database.")
         self.status_label.config(text="Training complete.")
 
-### ===== Recognition Page ===== ###
+##############################
+# Recognition Page
+##############################
 class RecognizeFrame(tk.Frame):
-    def __init__(self, parent, camera):
+    def __init__(self, parent, camera, db_manager):
         super().__init__(parent, bg="black")
         self.parent = parent
         self.camera = camera
+        self.db_manager = db_manager
         self.running = False
 
         # Setup TTS engine and speech queue
@@ -190,16 +274,23 @@ class RecognizeFrame(tk.Frame):
         self.last_spoken_name = None
         threading.Thread(target=self.speech_worker, daemon=True).start()
 
-        # Load encodings
-        try:
-            with open("encodings.pickle", "rb") as f:
-                data = pickle.loads(f.read())
-            self.known_face_encodings = data["encodings"]
-            self.known_face_names = data["names"]
-            self.known_face_occupations = data.get("occupations", [])
-            self.known_face_ages = data.get("ages", [])
-        except Exception as e:
-            messagebox.showerror("Error", f"Error loading encodings: {e}")
+        # Load encodings from DB
+        enc_data = self.db_manager.get_encodings()
+        if enc_data:
+            try:
+                data = pickle.loads(enc_data)
+                self.known_face_encodings = data["encodings"]
+                self.known_face_names = data["names"]
+                self.known_face_occupations = data.get("occupations", [])
+                self.known_face_ages = data.get("ages", [])
+            except Exception as e:
+                messagebox.showerror("Error", f"Error loading encodings: {e}")
+                self.known_face_encodings = []
+                self.known_face_names = []
+                self.known_face_occupations = []
+                self.known_face_ages = []
+        else:
+            messagebox.showerror("Error", "No encodings found in database. Please train the model first.")
             self.known_face_encodings = []
             self.known_face_names = []
             self.known_face_occupations = []
@@ -324,7 +415,9 @@ class RecognizeFrame(tk.Frame):
     def stop_camera(self):
         self.running = False
 
-### ===== Main App with Navigation ===== ###
+##############################
+# Main App with Navigation and Custom Theme
+##############################
 class MainApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -332,9 +425,21 @@ class MainApp(tk.Tk):
         self.geometry("1300x700")
         self.configure(bg="black")
 
-        # Use ttk style and set a theme; "clam" is modern and clean
+        # Create and initialize database
+        try:
+            self.db_manager = DatabaseManager(host='localhost', user='root', password='', database='face_recognition_db')
+        except Exception as e:
+            messagebox.showerror("Database Error", str(e))
+            self.destroy()
+            return
+
+        # Use ttk style and set a custom theme (orange, grey, black)
         style = ttk.Style(self)
         style.theme_use("clam")
+        # Customize some style options (buttons, labels)
+        style.configure("TButton", background="#555555", foreground="white", font=("Arial", 14))
+        style.map("TButton", background=[("active", "#FFA500")])
+        style.configure("TLabel", background="black", foreground="white", font=("Arial", 14))
 
         # Create a single shared camera instance
         try:
@@ -347,11 +452,11 @@ class MainApp(tk.Tk):
             messagebox.showerror("Camera Error", f"Failed to initialize camera: {e}")
             self.camera = None
 
-        # Navigation sidebar
+        # Navigation sidebar with custom colors (grey background, orange accents)
         nav_frame = tk.Frame(self, bg="#333333")
         nav_frame.pack(side="left", fill="y")
         btn_style = {"font": ("Arial", 14), "bg": "#555555", "fg": "white", 
-                     "activebackground": "#777777", "bd": 0, "relief": tk.FLAT, "highlightthickness": 0}
+                     "activebackground": "#FFA500", "bd": 0, "relief": tk.FLAT, "highlightthickness": 0}
 
         self.btn_capture = tk.Button(nav_frame, text="Capture", command=lambda: self.show_frame("capture"), **btn_style)
         self.btn_capture.pack(fill="x", pady=5, padx=10)
@@ -365,10 +470,10 @@ class MainApp(tk.Tk):
         container.pack(side="right", fill="both", expand=True)
 
         self.frames = {}
-        # Pass the shared camera to pages that need it
-        self.frames["capture"] = CaptureFrame(container, self.camera) if self.camera else CaptureFrame(container, None)
-        self.frames["train"] = TrainFrame(container)
-        self.frames["recognize"] = RecognizeFrame(container, self.camera) if self.camera else RecognizeFrame(container, None)
+        # Pass the shared camera and db_manager to pages that need them
+        self.frames["capture"] = CaptureFrame(container, self.camera, self.db_manager) if self.camera else CaptureFrame(container, None, self.db_manager)
+        self.frames["train"] = TrainFrame(container, self.db_manager)
+        self.frames["recognize"] = RecognizeFrame(container, self.camera, self.db_manager) if self.camera else RecognizeFrame(container, None, self.db_manager)
         for frame in self.frames.values():
             frame.grid(row=0, column=0, sticky="nsew")
 
@@ -392,6 +497,7 @@ class MainApp(tk.Tk):
     def on_close(self):
         if self.camera:
             self.camera.stop()
+        self.db_manager.close()
         self.destroy()
 
 if __name__ == "__main__":
