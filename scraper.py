@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service as ChromeService
+from shutil import which
 import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk
@@ -79,13 +81,27 @@ class DatabaseManager:
 ##############################
 # LinkedIn Scraper
 ##############################
+
 class LinkedInScraper:
     def __init__(self, email, password, db_manager):
         self.email = email
         self.password = password
         self.db_manager = db_manager
+
         options = webdriver.ChromeOptions()
-        self.driver = webdriver.Chrome(options=options)
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1024,768')
+        # comment this to view browser
+        options.add_argument('--headless=new')  # "new" headless mode is required in latest Chromium
+
+        # Force use of the system-installed chromedriver
+        chromedriver_path = which("chromedriver")
+        if not chromedriver_path:
+            raise Exception("Chromedriver not found in PATH. Install it with `sudo apt install chromium-chromedriver`.")
+        self.driver = webdriver.Chrome(service=ChromeService(executable_path=chromedriver_path), options=options)
+
     
     def login(self):
         print("Logging into LinkedIn...")
@@ -114,8 +130,9 @@ class LinkedInScraper:
                 pass
 
         occupation_tag = soup.find('div', {'class': 'text-body-medium'})
-        occupation = occupation_tag.get_text(strip=True) if occupation_tag else "Unknown"
-        age = "Unknown"  # Not available on LinkedIn
+        occupation = occupation_tag.get_text(strip=True)[:33] if occupation_tag else "Unknown"
+
+        age = 23  # Not available on LinkedIn
 
         img_tag = soup.find('img', {'class': 'profile-photo-edit__preview'})
         image_url = img_tag['src'] if img_tag and 'src' in img_tag.attrs else None
@@ -242,7 +259,7 @@ class ProfileEntryUI:
 # Main Execution
 ##############################
 def main():
-    email = ""
+    email = "supermanismebvo123@gmail.com"
     password = ""
 
     db_manager = DatabaseManager(host='localhost', user='root', password='Right1234', database='face_recognition_db')
